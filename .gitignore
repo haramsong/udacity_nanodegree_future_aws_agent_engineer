@@ -17,8 +17,8 @@ build/
 credentials
 aws-credentials*
 
-# Local tool settings (project .claude/settings.json is shared and stays tracked).
-# Needs the ** prefix: a pattern with an internal slash is anchored to the repo root,
+# Local tool settings — the whole .claude directory, at the root and in every project.
+# Nothing under .claude is shared, including settings.json.
 **/.claude/
 
 # Editor / OS noise
