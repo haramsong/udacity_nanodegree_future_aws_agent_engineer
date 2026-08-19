@@ -1,0 +1,15 @@
+{
+  "flowId": "QRTCLTQ0BT",
+  "flowVersion": "2",
+  "flowAliasId": "N041VVXFZG",
+  "flowArn": "arn:aws:bedrock:us-east-1:809961193920:flow/QRTCLTQ0BT",
+  "flowRoleArn": "arn:aws:iam::809961193920:role/AmazonBedrockExecutionRoleForFlows_customersupport",
+  "bugBranch": "lambda",
+  "accountId": "809961193920",
+  "harnessId": "customer_support_bug_agent-bpj4oCYaQR",
+  "harnessArn": "arn:aws:bedrock-agentcore:us-east-1:809961193920:harness/customer_support_bug_agent-bpj4oCYaQR",
+  "harnessName": "customer_support_bug_agent",
+  "harnessModelId": "amazon.nova-pro-v1:0",
+  "bugIntakeLambdaArn": "arn:aws:lambda:us-east-1:809961193920:function:bug-intake-node",
+  "bugIntakeRoleArn": "arn:aws:iam::809961193920:role/bug-intake-node-role"
+}

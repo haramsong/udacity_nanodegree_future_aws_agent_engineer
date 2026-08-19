@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# Lambda / build artifacts
+build/
+*.zip
+
+# Credentials and local environment — never commit
+.env
+.env.*
+*.pem
+credentials
+aws-credentials*
+
+# Local tool settings (project .claude/settings.json is shared and stays tracked).
+# Needs the ** prefix: a pattern with an internal slash is anchored to the repo root,
+**/.claude/
+
+# Editor / OS noise
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Deliberately tracked, listed here so it is not added by mistake:
+#   deploy-state.json          - generated, but holds the deployed resource ids the
+#                                write-ups reference; no secrets
+#   evaluation/*.jsonl         - evaluation dataset and judge results are submission artifacts
+#   evaluation/screenshot/*    - rubric evidence
