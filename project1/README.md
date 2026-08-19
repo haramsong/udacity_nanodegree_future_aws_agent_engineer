@@ -213,3 +213,41 @@ so `configure_harness.py` moves the harness off its default
 
 Nova wraps its reasoning in `<thinking>…</thinking>` before the reply; `bug_intake.py`
 strips those blocks so they never reach the customer.
+
+## Provenance
+
+**Course-provided, unmodified** — `cloudformation-tool.yaml`, `cloudformation-testing.yaml`,
+`create_bug_report.py`, `generate-eval-dataset.py`, `online_shop_faq.md`,
+`flow-test-template.json`, `requirements.txt`.
+
+`create_bug_report.py` staying untouched is a design constraint, not an accident: it reads
+the Bedrock Agent action-group event format, so the bug branch had to call it in that
+format. That is why the agent's tool is an `inline_function` (return of control) and why
+`bug_intake.py` builds the `messageVersion` / `function` / `parameters` payload by hand.
+
+**Authored for this submission**
+
+| | |
+| --- | --- |
+| `common.py`, `configure_harness.py`, `bug_intake.py`, `deploy_bug_intake.py`, `deploy_flow.py`, `deploy_agent.py` | deployment and runtime code |
+| `invoke_flow.py`, `check_routing.py`, `chat_bug_agent.py` | test and inspection tools |
+| `evaluation/flow-tests.json` | 13-prompt test suite, written from `flow-test-template.json` |
+| `requirements-agentcore.txt` | botocore 1.43.x floor for the harness APIs |
+| `README.md`, `SUBMISSION.md`, `evaluation/README.md`, `evaluation/EVALUATION.md` | write-ups |
+
+The prompts themselves are part of this: the classifier, FAQ and redirect templates live in
+`deploy_flow.py`, and the agent instruction plus the `create_bug_report` tool schema live in
+`common.py`, so the deployed configuration has a single source in version control.
+
+**Generated, not authored** — `deploy-state.json` (written by the deploy scripts),
+`evaluation/output_eval_dataset.jsonl` (by `generate-eval-dataset.py`),
+`evaluation/output_eval_results.jsonl` (downloaded from the Bedrock Evaluations output
+bucket).
+
+**Created outside these scripts** — the AgentCore harness `customer_support_bug_agent` and
+its runtime were stood up manually; `configure_harness.py` then set its model, system
+prompt, and tool. The screenshots in `evaluation/screenshot/` were captured from the AWS
+console and terminal.
+
+See the [repository README](../README.md#provenance-and-attribution) for external references
+and the AI-assistance note.
