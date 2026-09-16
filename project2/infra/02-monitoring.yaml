@@ -1,0 +1,76 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Customer Support AI Agent — CloudWatch monitoring.
+  Deploy AFTER `agentcore deploy`, once the runtime log group exists.
+  Creates a metric filter counting ERROR log entries and an alarm that fires
+  when more than five errors occur in a five-minute window.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csai
+
+  RuntimeLogGroupName:
+    Type: String
+    Description: >
+      CloudWatch log group of the deployed AgentCore Runtime, e.g.
+      /aws/bedrock-agentcore/runtimes/<agent-id>-DEFAULT
+
+  ErrorThreshold:
+    Type: Number
+    Default: 5
+    Description: Errors in a five-minute window before the alarm fires.
+
+  AlarmEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address to notify. Leave blank to skip the SNS topic.
+
+Conditions:
+  HasAlarmEmail: !Not [!Equals [!Ref AlarmEmail, ""]]
+
+Resources:
+  AgentErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref RuntimeLogGroupName
+      FilterPattern: "ERROR"
+      MetricTransformations:
+        - MetricName: AgentErrorCount
+          MetricNamespace: !Sub "${ProjectName}/Agent"
+          MetricValue: "1"
+          DefaultValue: 0
+
+  AlarmTopic:
+    Type: AWS::SNS::Topic
+    Condition: HasAlarmEmail
+    Properties:
+      TopicName: !Sub "${ProjectName}-agent-alarms"
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlarmEmail
+
+  AgentErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn: AgentErrorMetricFilter
+    Properties:
+      AlarmName: !Sub "${ProjectName}-agent-error-rate"
+      AlarmDescription: !Sub "More than ${ErrorThreshold} ERROR entries in the agent runtime log within 5 minutes."
+      Namespace: !Sub "${ProjectName}/Agent"
+      MetricName: AgentErrorCount
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: !Ref ErrorThreshold
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: !If
+        - HasAlarmEmail
+        - [!Ref AlarmTopic]
+        - !Ref AWS::NoValue
+
+Outputs:
+  AlarmName:
+    Value: !Ref AgentErrorAlarm
+  MetricFilterName:
+    Value: !Ref AgentErrorMetricFilter

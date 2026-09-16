@@ -1,0 +1,40 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Customer Support AI Agent — bootstrap stack.
+  Creates the single S3 bucket that holds both the Lambda deployment packages
+  (prefix "lambda/") and the Knowledge Base data source (prefix "kb/").
+  Deployed first so that artefacts can be uploaded before the core stack runs.
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csai
+    Description: Prefix used to name resources.
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${ProjectName}-artifacts-${AWS::AccountId}-${AWS::Region}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      VersioningConfiguration:
+        Status: Enabled
+
+Outputs:
+  ArtifactBucketName:
+    Description: Bucket holding Lambda zips and the Knowledge Base source documents.
+    Value: !Ref ArtifactBucket
+    Export:
+      Name: !Sub "${AWS::StackName}-ArtifactBucketName"
+  ArtifactBucketArn:
+    Value: !GetAtt ArtifactBucket.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ArtifactBucketArn"

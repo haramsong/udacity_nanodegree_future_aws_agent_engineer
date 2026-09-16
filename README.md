@@ -10,6 +10,7 @@ record renders directly.
 | Project                 | What it builds                                                                                                                       | Verification record                               |
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | [`project1`](project1/) | Customer support Bedrock Flow — classifies a customer message and routes it to a bug-ticket agent, an FAQ answer, or a phone handoff | **[project1/evaluation →](project1/evaluation/)** |
+| [`project2`](project2/) | Customer support AI agent on Amazon Bedrock AgentCore — RAG, Gateway tools over MCP, cross-session memory, a code sandbox, and a browser | **[project2/evaluation →](project2/evaluation/)** |
 
 ---
 
@@ -50,13 +51,68 @@ line.
 
 ---
 
+## project2 — Customer support AI agent on AgentCore
+
+A production-shaped support agent for a fictional store, deployed to the Amazon Bedrock
+AgentCore Runtime. It answers policy and product questions from a knowledge base, looks up
+live orders and processes refunds through the AgentCore Gateway, remembers customers across
+sessions, computes loyalty discounts in a sandbox, and reads live web pages.
+
+```
+            agentcore invoke
+                   │
+    ┌──────────────▼───────────────┐
+    │   AgentCore Runtime          │  main.py, @app.entrypoint, Nova 2 Lite
+    └───┬───────┬───────┬──────┬───┘
+        │       │       │      └─► AgentCore Browser ──► live web
+        │       │       └────────► Code Interpreter (loyalty maths)
+        │       └────────────────► AgentCore Memory (facts + preferences)
+        ├────────────────────────► Knowledge Base ◄─ OpenSearch Serverless ◄─ S3
+        └────────────────────────► Gateway (MCP) ├─ order-tracker    → API Gateway → Lambda
+                                                 └─ refund-processor → Lambda (direct)
+```
+
+|            |                                                                                                              |
+| ---------- | ------------------------------------------------------------------------------------------------------------ |
+| Tests      | 6/6 functional scenarios pass against the **deployed** runtime                                               |
+| Gateway    | 6 MCP tools across two target types — 3 from an API Gateway REST stage, 3 from a direct Lambda target        |
+| Infra      | Two CloudFormation stacks cover everything except the runtime, which `agentcore deploy` builds and ships     |
+| Monitoring | `ERROR` metric filter and an alarm at more than 5 errors in 5 minutes                                        |
+| Caveat     | CodeBuild is blocked by an Organizations SCP, so the ARM64 image is built locally with `--local-build`       |
+
+Three failures worth recording, because each one only appeared in the cloud:
+
+- **The Gateway lost its tools after the first request.** `strands_tools.browser` calls
+  `nest_asyncio.apply()`, which swaps in the pure-Python `asyncio.Task`; on Python 3.14
+  `asyncio.current_task()` then returns `None` and every later MCP connection dies inside
+  anyio. The patch is process-wide, so a warm container carries it into the next request.
+- **The generated execution role knew nothing about the project's own resources.** RAG,
+  memory and browsing all failed on the deployed agent while working locally, because local
+  runs use the developer's credentials.
+- **`uv pip install .` aborted the Docker build**, because without an explicit build backend
+  setuptools treats `infra/`, `lambda/` and `starter/` as packages.
+
+**Where to look**
+
+|                                                                        |                                                                          |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| [project2/evaluation/](project2/evaluation/)                           | verification record — rubric criterion → screenshot → what it shows       |
+| [project2/README.md](project2/README.md)                               | architecture, deploy order, implementation notes, teardown                |
+| [project2/main.py](project2/main.py)                                   | the agent — all eight starter TODO sections implemented                   |
+| [project2/infra/](project2/infra/)                                     | CloudFormation templates and the deploy / permissions / destroy scripts   |
+| [project2/tests/transcripts/](project2/tests/transcripts/)             | full transcripts of every test suite run                                  |
+| [project2/evaluation/REFLECTION.md](project2/evaluation/REFLECTION.md) | written reflection                                                        |
+
+---
+
 ## Conventions across projects
 
 - **Region**: `us-east-1` for all Bedrock features.
 - **Credentials**: `export AWS_PROFILE=udacity` before running anything.
-- **Python**: per-project `.venv`, created from that project's `requirements*.txt`.
-- **Deployment state**: each project writes resource ids to its own `deploy-state.json`,
-  which later scripts read instead of taking ids on the command line. It holds no secrets.
+- **Python**: per-project `.venv`. project1 installs from `requirements*.txt`; project2 is
+  managed by [uv](https://docs.astral.sh/uv/) from its `pyproject.toml` (Python 3.14).
+- **Deployment state**: project1 writes resource ids to `deploy-state.json`; project2 reads
+  them back from CloudFormation stack outputs. Neither holds secrets.
 - **Docs**: `README.md` is the technical write-up, `evaluation/` is the rubric evidence,
   `SUBMISSION.md` is the submission-facing checklist.
 

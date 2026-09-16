@@ -1,0 +1,519 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Customer Support AI Agent — core infrastructure.
+  Lambda functions, the order-tracking REST API, the Bedrock Knowledge Base
+  (OpenSearch Serverless vector store), the AgentCore Memory resource, and the
+  AgentCore Gateway with its two targets.
+
+  Deliberately NOT included: the AgentCore Runtime. The agent itself is packaged
+  and deployed separately with `agentcore configure` / `agentcore deploy`.
+
+# ─────────────────────────────────────────────────────────────────────────────
+Parameters:
+  ProjectName:
+    Type: String
+    Default: csai
+    Description: Prefix used when naming resources.
+
+  ArtifactBucket:
+    Type: String
+    Description: Bucket created by 00-bootstrap.yaml (Lambda zips + KB documents).
+
+  OrderTrackerS3Key:
+    Type: String
+    Default: lambda/order_tracker.zip
+
+  RefundProcessorS3Key:
+    Type: String
+    Default: lambda/refund_processor.zip
+
+  KnowledgeBasePrefix:
+    Type: String
+    Default: kb/
+    Description: S3 prefix holding the Knowledge Base source documents.
+
+  DeployerPrincipalArn:
+    Type: String
+    Description: >
+      IAM principal running this stack. Needed in the OpenSearch Serverless data
+      access policy because CloudFormation creates the vector index with these
+      credentials.
+
+  EmbeddingModelArn:
+    Type: String
+    Default: arn:aws:bedrock:us-east-1::foundation-model/amazon.titan-embed-text-v2:0
+    Description: Amazon Titan Text Embeddings V2 (1024 dimensions).
+
+  VectorIndexName:
+    Type: String
+    Default: bedrock-knowledge-base-default-index
+
+  ApiStageName:
+    Type: String
+    Default: prod
+
+# ─────────────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ── Lambda ─────────────────────────────────────────────────────────────────
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-lambda-exec-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  OrderTrackerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: order-tracker
+      Description: Order and customer lookups, invoked through API Gateway proxy integration.
+      Runtime: python3.12
+      Handler: order_tracker.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref OrderTrackerS3Key
+
+  RefundProcessorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: refund-processor
+      Description: Refunds and return labels, invoked directly by the AgentCore Gateway.
+      Runtime: python3.12
+      Handler: refund_processor.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Code:
+        S3Bucket: !Ref ArtifactBucket
+        S3Key: !Ref RefundProcessorS3Key
+
+  # ── REST API in front of order-tracker ─────────────────────────────────────
+  # The Gateway's API Gateway target turns each GET operation into an MCP tool
+  # named after the method's OperationName.
+  OrderApi:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: !Sub "${ProjectName}-order-api"
+      Description: Order tracking API exposed to the AgentCore Gateway as MCP tools.
+      EndpointConfiguration:
+        Types: [REGIONAL]
+
+  OrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrderApi
+      ParentId: !GetAtt OrderApi.RootResourceId
+      PathPart: orders
+
+  OrderIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrderApi
+      ParentId: !Ref OrdersResource
+      PathPart: "{order_id}"
+
+  CustomersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrderApi
+      ParentId: !GetAtt OrderApi.RootResourceId
+      PathPart: customers
+
+  CustomerIdResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrderApi
+      ParentId: !Ref CustomersResource
+      PathPart: "{customer_id}"
+
+  CustomerOrdersResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref OrderApi
+      ParentId: !Ref CustomerIdResource
+      PathPart: orders
+
+  GetOrderMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrderApi
+      ResourceId: !Ref OrderIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      OperationName: get_order
+      RequestParameters:
+        method.request.path.order_id: true
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations"
+
+  GetCustomerOrdersMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrderApi
+      ResourceId: !Ref CustomerOrdersResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      OperationName: get_customer_orders
+      RequestParameters:
+        method.request.path.customer_id: true
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations"
+
+  GetCustomerMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref OrderApi
+      ResourceId: !Ref CustomerIdResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      OperationName: get_customer
+      RequestParameters:
+        method.request.path.customer_id: true
+      MethodResponses:
+        - StatusCode: "200"
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub "arn:${AWS::Partition}:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${OrderTrackerFunction.Arn}/invocations"
+
+  OrderApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt OrderTrackerFunction.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${OrderApi}/*/GET/*"
+
+  OrderApiDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - GetOrderMethod
+      - GetCustomerOrdersMethod
+      - GetCustomerMethod
+    Properties:
+      RestApiId: !Ref OrderApi
+      Description: Initial deployment of the order tracking API.
+
+  OrderApiStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref OrderApi
+      DeploymentId: !Ref OrderApiDeployment
+      StageName: !Ref ApiStageName
+
+  # ── OpenSearch Serverless vector store ─────────────────────────────────────
+  CollectionEncryptionPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub "${ProjectName}-kb-enc"
+      Type: encryption
+      Policy: !Sub |
+        {"Rules":[{"ResourceType":"collection","Resource":["collection/${ProjectName}-kb"]}],"AWSOwnedKey":true}
+
+  CollectionNetworkPolicy:
+    Type: AWS::OpenSearchServerless::SecurityPolicy
+    Properties:
+      Name: !Sub "${ProjectName}-kb-net"
+      Type: network
+      Policy: !Sub |
+        [{"Rules":[{"ResourceType":"collection","Resource":["collection/${ProjectName}-kb"]},
+                   {"ResourceType":"dashboard","Resource":["collection/${ProjectName}-kb"]}],
+          "AllowFromPublic":true}]
+
+  # Grants both the Knowledge Base role (reads/writes vectors) and the deploying
+  # principal (CloudFormation creates the index) full access to the collection.
+  CollectionDataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub "${ProjectName}-kb-access"
+      Type: data
+      Policy: !Sub
+        - |
+          [{"Rules":[{"ResourceType":"index","Resource":["index/${ProjectName}-kb/*"],
+                      "Permission":["aoss:CreateIndex","aoss:DeleteIndex","aoss:UpdateIndex",
+                                    "aoss:DescribeIndex","aoss:ReadDocument","aoss:WriteDocument"]},
+                     {"ResourceType":"collection","Resource":["collection/${ProjectName}-kb"],
+                      "Permission":["aoss:CreateCollectionItems","aoss:DeleteCollectionItems",
+                                    "aoss:UpdateCollectionItems","aoss:DescribeCollectionItems"]}],
+            "Principal":["${KbRoleArn}","${DeployerPrincipalArn}"]}]
+        - KbRoleArn: !GetAtt KnowledgeBaseRole.Arn
+
+  VectorCollection:
+    Type: AWS::OpenSearchServerless::Collection
+    DependsOn:
+      - CollectionEncryptionPolicy
+      - CollectionNetworkPolicy
+    Properties:
+      Name: !Sub "${ProjectName}-kb"
+      Type: VECTORSEARCH
+      Description: Vector store backing the customer support Knowledge Base.
+
+  VectorIndex:
+    Type: AWS::OpenSearchServerless::Index
+    DependsOn: CollectionDataAccessPolicy
+    Properties:
+      CollectionEndpoint: !GetAtt VectorCollection.CollectionEndpoint
+      IndexName: !Ref VectorIndexName
+      Settings:
+        Index:
+          Knn: true
+      Mappings:
+        Properties:
+          bedrock-knowledge-base-default-vector:
+            Type: knn_vector
+            Dimension: 1024
+            Method:
+              Engine: faiss
+              Name: hnsw
+              SpaceType: l2
+              Parameters:
+                EfConstruction: 512
+                M: 16
+          AMAZON_BEDROCK_TEXT_CHUNK:
+            Type: text
+            Index: true
+          AMAZON_BEDROCK_METADATA:
+            Type: text
+            Index: false
+
+  # ── Bedrock Knowledge Base ─────────────────────────────────────────────────
+  KnowledgeBaseRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-kb-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: kb-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: bedrock:InvokeModel
+                Resource: !Ref EmbeddingModelArn
+              - Effect: Allow
+                Action: aoss:APIAccessAll
+                Resource: !Sub "arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}"
+              - Effect: Allow
+                Action: s3:GetObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}/${KnowledgeBasePrefix}*"
+
+  KnowledgeBase:
+    Type: AWS::Bedrock::KnowledgeBase
+    DependsOn: VectorIndex
+    Properties:
+      Name: CustomerSupportKB
+      Description: Product catalog, return policy, and loyalty program reference.
+      RoleArn: !GetAtt KnowledgeBaseRole.Arn
+      KnowledgeBaseConfiguration:
+        Type: VECTOR
+        VectorKnowledgeBaseConfiguration:
+          EmbeddingModelArn: !Ref EmbeddingModelArn
+      StorageConfiguration:
+        Type: OPENSEARCH_SERVERLESS
+        OpensearchServerlessConfiguration:
+          CollectionArn: !GetAtt VectorCollection.Arn
+          VectorIndexName: !Ref VectorIndexName
+          FieldMapping:
+            VectorField: bedrock-knowledge-base-default-vector
+            TextField: AMAZON_BEDROCK_TEXT_CHUNK
+            MetadataField: AMAZON_BEDROCK_METADATA
+
+  KnowledgeBaseDataSource:
+    Type: AWS::Bedrock::DataSource
+    Properties:
+      KnowledgeBaseId: !Ref KnowledgeBase
+      Name: product-catalog
+      DataSourceConfiguration:
+        Type: S3
+        S3Configuration:
+          BucketArn: !Sub "arn:${AWS::Partition}:s3:::${ArtifactBucket}"
+          InclusionPrefixes:
+            - !Ref KnowledgeBasePrefix
+
+  # ── AgentCore Memory ───────────────────────────────────────────────────────
+  SupportMemory:
+    Type: AWS::BedrockAgentCore::Memory
+    Properties:
+      Name: CustomerSupportMemory
+      Description: Long-term customer facts and preferences across support sessions.
+      EventExpiryDuration: 90
+      MemoryStrategies:
+        - SemanticMemoryStrategy:
+            Name: customer_facts
+            Description: Durable facts stated by the customer.
+            NamespaceTemplates:
+              - "cs_agent/{actorId}/facts"
+        - UserPreferenceMemoryStrategy:
+            Name: customer_preferences
+            Description: How the customer prefers to be helped.
+            NamespaceTemplates:
+              - "cs_agent/{actorId}/preferences"
+
+  # ── AgentCore Gateway ──────────────────────────────────────────────────────
+  # NOTE: AuthorizerType NONE is used because the starter agent connects without
+  # a bearer token. Acceptable for this temporary educational environment only.
+  GatewayRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ProjectName}-gateway-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: gateway-target-invoke
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource: !GetAtt RefundProcessorFunction.Arn
+              - Effect: Allow
+                Action: execute-api:Invoke
+                Resource: !Sub "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${OrderApi}/*"
+
+  SupportGateway:
+    Type: AWS::BedrockAgentCore::Gateway
+    Properties:
+      Name: CustomerSupportGateway
+      Description: Exposes the order API and refund Lambda to the agent over MCP.
+      RoleArn: !GetAtt GatewayRole.Arn
+      ProtocolType: MCP
+      AuthorizerType: NONE
+
+  OrderTrackerTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    DependsOn: OrderApiStage
+    Properties:
+      GatewayIdentifier: !GetAtt SupportGateway.GatewayIdentifier
+      Name: order-tracker
+      Description: Order and customer lookups served by the REST API.
+      CredentialProviderConfigurations:
+        - CredentialProviderType: GATEWAY_IAM_ROLE
+      TargetConfiguration:
+        Mcp:
+          ApiGateway:
+            RestApiId: !Ref OrderApi
+            Stage: !Ref ApiStageName
+            ApiGatewayToolConfiguration:
+              ToolFilters:
+                - FilterPath: "/orders/{order_id}"
+                  Methods: [GET]
+                - FilterPath: "/customers/{customer_id}/orders"
+                  Methods: [GET]
+                - FilterPath: "/customers/{customer_id}"
+                  Methods: [GET]
+
+  RefundProcessorTarget:
+    Type: AWS::BedrockAgentCore::GatewayTarget
+    Properties:
+      GatewayIdentifier: !GetAtt SupportGateway.GatewayIdentifier
+      Name: refund-processor
+      Description: Refunds and return labels served by direct Lambda invocation.
+      CredentialProviderConfigurations:
+        - CredentialProviderType: GATEWAY_IAM_ROLE
+      TargetConfiguration:
+        Mcp:
+          Lambda:
+            LambdaArn: !GetAtt RefundProcessorFunction.Arn
+            # Mirrors starter/lambda/lambda_schema.
+            ToolSchema:
+              InlinePayload:
+                - Name: initiate_refund
+                  Description: Initiate a refund for a customer order.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      order_id:
+                        Type: string
+                        Description: Order ID to refund
+                      reason:
+                        Type: string
+                        Description: Reason for refund
+                      amount:
+                        Type: number
+                        Description: Refund amount in USD
+                    Required: [order_id, reason]
+                - Name: check_refund_status
+                  Description: Check the status of an existing refund.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      refund_id:
+                        Type: string
+                        Description: Refund ID to check
+                    Required: [refund_id]
+                - Name: get_return_label
+                  Description: Generate a prepaid return shipping label for an order.
+                  InputSchema:
+                    Type: object
+                    Properties:
+                      order_id:
+                        Type: string
+                        Description: Order ID needing a label
+                    Required: [order_id]
+
+# ─────────────────────────────────────────────────────────────────────────────
+Outputs:
+  GatewayUrl:
+    Description: Paste into GATEWAY_URL in main.py.
+    Value: !GetAtt SupportGateway.GatewayUrl
+  KnowledgeBaseId:
+    Description: Paste into KB_ID in main.py.
+    Value: !Ref KnowledgeBase
+  MemoryId:
+    Description: Paste into MEMORY_ID in main.py.
+    Value: !GetAtt SupportMemory.MemoryId
+  Region:
+    Description: Paste into REGION in main.py.
+    Value: !Ref AWS::Region
+  DataSourceId:
+    Description: Used by deploy.sh to start the Knowledge Base ingestion job.
+    Value: !GetAtt KnowledgeBaseDataSource.DataSourceId
+  RestApiId:
+    Value: !Ref OrderApi
+  RestApiEndpoint:
+    Value: !Sub "https://${OrderApi}.execute-api.${AWS::Region}.${AWS::URLSuffix}/${ApiStageName}"
+  OrderTrackerFunctionArn:
+    Value: !GetAtt OrderTrackerFunction.Arn
+  RefundProcessorFunctionArn:
+    Value: !GetAtt RefundProcessorFunction.Arn
+  CollectionEndpoint:
+    Value: !GetAtt VectorCollection.CollectionEndpoint
