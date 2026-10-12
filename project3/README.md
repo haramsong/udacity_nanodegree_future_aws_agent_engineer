@@ -18,6 +18,8 @@ A production-grade multi-agent customer support system built with the [Strands A
 | ---------- | ----------------------------------------------------------------------------------------------------- |
 | Tests      | `python tests/test_agent.py all` — **120/120** ([`1-1a`](evaluation/screenshots/1-1a.png), [`1-1b`](evaluation/screenshots/1-1b.png)) |
 | Tracing    | X-Ray map: `NovaMart-Orchestrator` → 4 worker agents + 3 `KnowledgeBase:*` nodes ([`2-1a`](evaluation/screenshots/2-1a.png), [`2-1b`](evaluation/screenshots/2-1b.png)) |
+| Knowledge Bases | 3 KBs on Titan Embed v2 + S3 Vectors, data sources synced ([`3-1*`, `3-3*`](evaluation/README.md#screenshots3-1apng--3-1dpng--knowledge-bases-in-the-console)) |
+| Local scenarios | `python src/agent_orchestrator.py test` — return approved, 60-day policy, $134.96 ([`4-1*`](evaluation/README.md#screenshots4-1apng--4-1fpng--python-srcagent_orchestratorpy-test)) |
 | Deployed   | AgentCore Runtime READY with the guardrail (v1), Memory ACTIVE, all three scenarios routed correctly via `invoke` |
 | Guardrail  | Math question allowed ($134.96); negotiation, competitor and legal-threat requests blocked |
 

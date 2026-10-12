@@ -1,8 +1,10 @@
 # project3 — Verification record
 
 Every rubric criterion, the evidence for it, and what that evidence actually shows.
-The two required screenshots are in [`screenshots/`](screenshots/); everything else below
-was read back from AWS or captured from terminal runs against the same deployment.
+The screenshots are in [`screenshots/`](screenshots/); everything else below was read back
+from AWS or captured from terminal runs against the same deployment. Sets `3-*` and `4-*` were
+added after the first review asked for Knowledge Base console evidence and for the output of
+`python src/agent_orchestrator.py test`.
 
 Related: [project README](../README.md) · [implementation](../src/agent_orchestrator.py) ·
 [populated `.env`](../.env) · [screenshots](screenshots/) · [all projects](../../)
@@ -28,6 +30,10 @@ Related: [project README](../README.md) · [implementation](../src/agent_orchest
 | --- | --- |
 | [`screenshots/1-1a.png`](screenshots/1-1a.png), [`screenshots/1-1b.png`](screenshots/1-1b.png) | `python tests/test_agent.py all` — **120/120** |
 | [`screenshots/2-1a.png`](screenshots/2-1a.png), [`screenshots/2-1b.png`](screenshots/2-1b.png) | X-Ray Service Map — `NovaMart-Orchestrator → Worker (→ Knowledge Base)` |
+| [`3-1a`](screenshots/3-1a.png) · [`3-1b`](screenshots/3-1b.png) · [`3-1c`](screenshots/3-1c.png) · [`3-1d`](screenshots/3-1d.png) | Bedrock console — the three Knowledge Bases: Titan Text Embeddings v2, Amazon S3 Vectors, per-domain index |
+| [`3-2a`](screenshots/3-2a.png) · [`3-2b`](screenshots/3-2b.png) · [`3-2c`](screenshots/3-2c.png) | `tests/test_agent.py` Task 5 — KB checks and the parallel retrieval |
+| [`3-3a`](screenshots/3-3a.png) · [`3-3b`](screenshots/3-3b.png) · [`3-3c`](screenshots/3-3c.png) | Bedrock console — each KB's data source: S3 prefix, sync history **Complete**, documents **INDEXED** |
+| [`4-1a`](screenshots/4-1a.png) … [`4-1f`](screenshots/4-1f.png) | `python src/agent_orchestrator.py test` — the three scenarios, end to end |
 
 ### `screenshots/1-1a.png` and `screenshots/1-1b.png` — full test suite, 120/120
 
@@ -97,6 +103,62 @@ The same graph read through the API (`aws xray get-service-graph`, last 20 minut
 > orchestrator connected to a single `UnknownRemoteService`. The rubric asks for the X-Ray
 > Service/Trace Map, which is what these frames show.
 
+### `screenshots/3-1a.png` … `3-1d.png` — Knowledge Bases in the console
+
+`3-1a` is the Knowledge Bases list: `novamart-returns-policy-kb`, `novamart-shipping-policy-kb`
+and `novamart-warranty-policy-kb`, all **Available**, one data source each. (The list's
+"Last sync date" column shows `-` for these KBs; the completed syncs are shown on the data
+source pages in `3-3*`.)
+
+`3-1b` (returns, `3JBAYDYDV9`), `3-1c` (shipping, `VEWGFB92H4`) and `3-1d` (warranty,
+`XLGHQHZ6DY`) are the detail pages. Each shows:
+
+| Field | Value |
+| --- | --- |
+| Embeddings model | **Titan Text Embeddings v2**, float, 1024 dimensions |
+| Vector store type | **Amazon S3 Vectors** |
+| S3 vector index | `arn:aws:s3vectors:us-east-1:087411424993:bucket/udacity-agentcore-vectors-087411424993-efc6d440/index/<domain>-policy-index` — the stack's `VectorStoreBucket` with the matching index |
+| Service role | `udacity-agentcore-agentcore-role` (from the stack) |
+| Data source | `<domain>-policy-docs`, Amazon S3, **Available** |
+
+### `screenshots/3-2a.png` … `3-2c.png` — Task 5 checks
+
+The Task 5 block of `tests/test_agent.py`: every KB ID set, every KB ACTIVE, on
+`amazon.titan-embed-text-v2:0`, with a completed sync; then `test_5_parallel_retrieval`.
+The three retrievers stream at the same time, so their tokens interleave in `3-2a` and the
+top of `3-2b` — that interleaving is the parallelism. After `[PARALLEL RETRIEVAL - END] All 3
+KBs responded (9.1s)` each retriever's clean answer is printed with its `s3://…/policies/<domain>/…`
+source, ending on **PASS `search_all_policies()` returned combined results from the three
+retrievers**.
+
+### `screenshots/3-3a.png` … `3-3c.png` — data sources synced
+
+The data source page of each KB (returns `ECY8FELC0X`, shipping `BWLJCHBXIM`, warranty
+`RM3DHHQKEK`):
+
+| KB | Sync job | Status | Scanned / added / failed | Documents (INDEXED) |
+| --- | --- | --- | --- | --- |
+| Returns (`3-3a`) | `NNFMLFZ35B` | **Complete** | 2 / 2 / 0 | `policies/returns/return_policy.txt`, `policies/returns/customer_tiers.txt` |
+| Shipping (`3-3b`) | `IGB9QNK6CD` | **Complete** | 2 / 2 / 0 | `policies/shipping/shipping_policy.txt`, `policies/shipping/customer_tiers.txt` |
+| Warranty (`3-3c`) | `9OVK6JLVSU` | **Complete** | 2 / 2 / 0 | `policies/warranty/warranty_policy.txt`, `policies/warranty/customer_tiers.txt` |
+
+Every document lives under the KB's own prefix in `udacity-agentcore-policy-docs-087411424993-efc6d440`,
+so each KB is scoped to `policies/returns/`, `policies/shipping/` or `policies/warranty/`.
+
+### `screenshots/4-1a.png` … `4-1f.png` — `python src/agent_orchestrator.py test`
+
+One run, preceded by `python infrastructure/seed_data.py` (top of `4-1a`) so ORD-27176 is
+`delivered` again:
+
+| Frames | Scenario | What is shown |
+| --- | --- | --- |
+| `4-1a`, `4-1b` | CUST-001 return of ORD-27176 | `initialize_session` → **InventoryAgent** (order delivered, 12 days, Premium; state v0→1) → **RefundAgent** (`DECISION: APPROVED`, `RET-9E146E68`; v1→2) → **CommunicationAgent** (v2→3); X-Ray trace published |
+| `4-1c` … `4-1f` | CUST-002 premium return policy | **PolicyAgent** → `search_all_policies` → 3 retrievers in parallel, `All 3 KBs responded (8.6s)` (v0→1) → **CommunicationAgent**: *"Premium customers enjoy an extended 60-day return window"* (v1→2) |
+| `4-1f` | CUST-003 5 × $29.99, 10% off | straight to **CommunicationAgent**: $149.95 − $14.995 = **$134.96** (v0→1) |
+
+Each scenario ends with `X-Ray trace … published successfully` — these are the traces behind
+the Service Map in `2-1*`.
+
 ---
 
 ## 1. Multi-Agent Graph — met
@@ -111,11 +173,12 @@ The same graph read through the API (`aws xray get-service-graph`, last 20 minut
 | Retrievers `temperature=0.0`, PolicyAgent `0.2` | `build_policy_agent()` |
 | Orchestrator on `config.ORCHESTRATOR_MODEL_ID`, `temperature=0.0`, six routing rules | `1-1a` · `build_orchestrator_agent()` |
 | Routing tools read WorkflowState, then write with `expected_version` | `_run_worker()` |
-| `route_to_communication_agent` always last; orchestrator never writes the reply | routing traces below |
+| `route_to_communication_agent` always last; orchestrator never writes the reply | `4-1*` · routing traces below |
 
 ### Routing, observed in the local `test` run
 
-Tool calls printed by `python src/agent_orchestrator.py test` (orchestrator tool numbers):
+Tool calls printed by `python src/agent_orchestrator.py test` (orchestrator tool numbers;
+screenshots `4-1a` … `4-1f`):
 
 ```
 CUST-001  "I want to return my wireless headphones from order ORD-27176"
@@ -183,11 +246,11 @@ questions."*
 | --- | --- |
 | `create_memory()` with `summaryMemoryStrategy`, name and description | `configure_memory()` · `1-1a` |
 | `eventExpiryDuration=7`, returns `memoryArn` | `1-1a` |
-| Three KBs on `policies/returns/`, `policies/shipping/`, `policies/warranty/` | `1-1a` |
-| Titan Embed Text v2, S3 Vectors bucket from the stack with the matching index | `1-1a` (embedding model) · resource table above |
-| Each data source synced | `1-1a`: completed sync ×3 (2 documents indexed per KB, 0 failed) |
-| `.env` has the three KB IDs | `1-1a` · [`../.env`](../.env) |
-| `search_all_policies()` returns results from all three KBs | `1-1b` |
+| Three KBs on `policies/returns/`, `policies/shipping/`, `policies/warranty/` | `3-1a` · `3-3a`–`3-3c` (document paths) |
+| Titan Embed Text v2, S3 Vectors bucket from the stack with the matching index | `3-1b`–`3-1d` · `3-2a` |
+| Each data source synced | `3-3a`–`3-3c`: sync **Complete**, 2 documents INDEXED per KB, 0 failed · `3-2a` |
+| `.env` has the three KB IDs | `3-2a` · [`../.env`](../.env) |
+| `search_all_policies()` returns results from all three KBs | `1-1b` · `3-2c` · `4-1d` |
 
 The KBs are self-managed (not Managed KB): each uses the stack's vector bucket with its own
 index, and the stack's `udacity-agentcore-agentcore-role` as the service role.
