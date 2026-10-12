@@ -11,6 +11,7 @@ record renders directly.
 | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------- |
 | [`project1`](project1/) | Customer support Bedrock Flow — classifies a customer message and routes it to a bug-ticket agent, an FAQ answer, or a phone handoff | **[project1/evaluation →](project1/evaluation/)** |
 | [`project2`](project2/) | Customer support AI agent on Amazon Bedrock AgentCore — RAG, Gateway tools over MCP, cross-session memory, a code sandbox, and a browser | **[project2/evaluation →](project2/evaluation/)** |
+| [`project3`](project3/) | Multi-agent customer support on AgentCore — Orchestrator → Worker agents with Strands, parallel RAG over three Knowledge Bases, Guardrails, X-Ray tracing | **[project3/evaluation →](project3/evaluation/)** |
 
 ---
 
@@ -105,14 +106,57 @@ Three failures worth recording, because each one only appeared in the cloud:
 
 ---
 
+## project3 — Multi-agent customer support on AgentCore
+
+NovaMart's support pipeline as five [Strands](https://github.com/strands-agents/sdk-python)
+agents in an Orchestrator → Workers hierarchy, deployed to the AgentCore Runtime with the
+AgentCore CLI. Workers share one DynamoDB WorkflowState record, written with optimistic
+locking; the PolicyAgent fans one question out to three retriever sub-agents in parallel.
+
+```
+OrchestratorAgent (Haiku 4.5) ── initialize_session → route_to_* → WorkflowState (DynamoDB)
+   ├─ InventoryAgent      orders / customers tables
+   ├─ RefundAgent         30-day Standard / 60-day Premium window, initiates the return
+   ├─ PolicyAgent ─┬─ ReturnsPolicyRetrieverAgent  → KB (returns)  ┐
+   │               ├─ ShippingPolicyRetrieverAgent → KB (shipping) ├ ThreadPoolExecutor
+   │               └─ WarrantyPolicyRetrieverAgent → KB (warranty) ┘
+   └─ CommunicationAgent  always last — writes the only customer-facing reply
+Workers: Sonnet 4.5 · every model call behind a Bedrock Guardrail (v1)
+```
+
+|            |                                                                                                                    |
+| ---------- | ------------------------------------------------------------------------------------------------------------------ |
+| Tests      | `tests/test_agent.py all` — **120/120**                                                                            |
+| Routing    | Return → Inventory → Refund → Communication; policy → Policy → Communication; math → Communication only           |
+| Guardrail  | Math question allowed; negotiation, competitor and legal-threat requests blocked on the deployed runtime          |
+| Tracing    | X-Ray map shows `NovaMart-Orchestrator` → 4 worker agents + 3 `KnowledgeBase:*` nodes                             |
+
+Worth recording: Strands runs a turn's tool calls **concurrently** by default. Haiku sometimes
+asked for `initialize_session` and a routing tool in one turn, so the routing tool read
+WorkflowState before it existed; the orchestrator now uses `SequentialToolExecutor`, which also
+keeps Inventory ahead of Refund.
+
+**Where to look**
+
+|                                                                  |                                                                       |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------- |
+| [project3/evaluation/](project3/evaluation/)                     | verification record — rubric criterion → evidence → what it shows    |
+| [project3/README.md](project3/README.md#submission--what-was-implemented) | what was implemented, then the course's starter README      |
+| [project3/src/agent_orchestrator.py](project3/src/agent_orchestrator.py) | the implementation — all TODOs in Tasks 2, 3, 4, 6            |
+| [project3/.env](project3/.env)                                   | populated deliverable — resource IDs only, no credentials             |
+| [project3/evaluation/screenshots/](project3/evaluation/screenshots/) | test score and X-Ray Service Map screenshots                      |
+
+---
+
 ## Conventions across projects
 
 - **Region**: `us-east-1` for all Bedrock features.
 - **Credentials**: `export AWS_PROFILE=udacity` before running anything.
-- **Python**: per-project `.venv`. project1 installs from `requirements*.txt`; project2 is
-  managed by [uv](https://docs.astral.sh/uv/) from its `pyproject.toml` (Python 3.14).
+- **Python**: per-project `.venv`. project1 and project3 install from `requirements*.txt`;
+  project2 is managed by [uv](https://docs.astral.sh/uv/) from its `pyproject.toml` (Python 3.14).
 - **Deployment state**: project1 writes resource ids to `deploy-state.json`; project2 reads
-  them back from CloudFormation stack outputs. Neither holds secrets.
+  them back from CloudFormation stack outputs; project3 keeps them in its `.env` (a
+  deliverable). None holds secrets.
 - **Docs**: `README.md` is the technical write-up, `evaluation/` is the rubric evidence,
   `SUBMISSION.md` is the submission-facing checklist.
 
@@ -158,6 +202,12 @@ These files ship with the course and are unmodified:
 | `project1/flow-test-template.json` | template the test suite was written from |
 | `project1/requirements.txt` | pinned boto3 |
 | `LICENSE.md`, `CODEOWNERS` | Udacity repository boilerplate |
+
+project3 is the course's [starter](https://github.com/udacity/cd14764-aws-agentic-c3-classroom/tree/main/project/starter)
+as shipped, except for the files listed under
+[project3/README.md → Changed files](project3/README.md#changed-files): the TODO bodies in
+`src/agent_orchestrator.py`, the populated `.env`, one `.gitignore` line, the CLI-written
+`agentcore/agentcore.json`, the submission section of `README.md`, and `evaluation/`.
 
 The rubric text and the step-by-step testing instructions also come from the course; they
 are quoted where the write-ups refer to them rather than reproduced in full.
